@@ -1,6 +1,6 @@
 # solar-project
-Python/MATLAB codes for automatically plotting data from test equipment
+Python code for automatically plotting data from test equipment
 
-- 06-01-25 data: raw data direct from test equipment
-- 07-30-25: provided MATLAB code for working with old Excel files originally created from the 06-01-25 data. transcoded to Python.
-- 08-03-25: Python code created to directly use the test files
+- 08-03-25: initial graph code
+- 09-15-25: added panel aliases
+- 09-16-25: conversion to interactive design
