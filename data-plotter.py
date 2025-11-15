@@ -14,17 +14,20 @@ import matplotlib.pyplot as plt
 import os
 import datetime
 import matplotlib.dates as mdates
-#import matplotlib.ticker as mtick
+import matplotlib.ticker as mtick
 
 timevalue = lambda timestring: datetime.datetime.strptime(timestring,
                                                           "%H:%M:%S")
 sample_to_time = lambda s: datetime.timedelta(0, int(s))
 sample_to_time_60 = lambda s: datetime.timedelta(0, int(s)*60)
 
-timemin = timevalue("10:00:00")
-timemax = timevalue("16:00:00")
+timemin = timevalue("9:00:00")
+timemax = timevalue("17:00:00")
 baseline_solar_noon = timevalue("13:10:26")
 baseline_dir = "/home/kramkoob/Downloads/06-01-25 baseline"
+panelL = 1.015 # m
+panelW = 0.505 # m
+panelA = panelL * panelW
 plots = list()
 
 def read_irr_export(filename:str,
@@ -68,7 +71,7 @@ def read_irr_export(filename:str,
 
     # find average temperature every 30 minutes
     i_avg = pd.DataFrame()
-    i_avg['Irr'] = i['Irr'].rolling(window=30).mean().iloc[::30]
+    i_avg['Irr'] = i['Irr'].rolling(window=30, min_periods=1).mean().iloc[::30]
     i_avg['Time'] = i['Time'].iloc[::30]
     
     return (i_start, i, i_avg)
@@ -121,11 +124,12 @@ def read_temps_export(filename:str, channel_set:int,
     # find average temperature every 30 minutes
     t_avg = pd.DataFrame()
     for s in ['LL', 'M', 'UR', 'Avg']:
-        t_avg[s] = t[s].rolling(window=30).mean().iloc[::30]
+        t_avg[s] = t[s].rolling(window=30, min_periods=1).mean().iloc[::30]
     t_avg['Time'] = t['Time'].iloc[::30]
     
     return (t_start, t, t_avg)
-def read_power_export(filename:str, channel_offset:int,
+def read_power_export(filename:str, irradiance:pd.DataFrame,
+                      channel_offset:int,
                       time_offset:datetime.timedelta=datetime.timedelta(0)):
     """
     Open and read power analyzer data series
@@ -134,6 +138,8 @@ def read_power_export(filename:str, channel_offset:int,
     ----------
     filename : str
         Path and filename of power analyzer .csv.
+    irradiance : pd.DataFrame
+        Irradiance measurements for efficiency calculations.
     channel_offset : int
         Channel number: 1 for ch1, 3 for ch3
     time_offset : datetime.timedelta, optional
@@ -169,33 +175,58 @@ def read_power_export(filename:str, channel_offset:int,
     # calculate power for each sample
     p_raw['Power'] = p_raw['Voltage'] * p_raw['Current']
 
-    # add time for each sample
-    #bline_sta_raw['Time'] = bline_sta_raw['Sample'].apply(sample_time)
-
     # find maximum power every 60th sample
     p = pd.DataFrame()
-    p['Power'] = p_raw['Power'].rolling(window=60).max().iloc[::60]
+    p['Power'] = p_raw['Power'].rolling(window=60, min_periods=1).max().iloc[::60]
     p['Time'] = p_raw['Time'].iloc[::60]
-    
-    # find average power every 30 minutes
+
+    # reset DataFrame indexing
+    p = p.reset_index(drop=True)
+
+    # align start of irradiance with start of power
+    t = 0
+    while(irradiance['Time'][t] < p['Time'][0]):
+        t+=1
+    t-=1
+
+    # Remove the first t data points
+    irradiance = irradiance.iloc[t:]
+
+    # Calculate incident solar power
+    p['isp'] = irradiance['Irr'] * panelA
+
+    # Calculate efficiency
+    p['Eff'] = 100 * p['Power'] / p['isp']
+
+    # find average power and efficiency every 30 minutes
     p_avg = pd.DataFrame()
-    p_avg['Power'] = p['Power'].rolling(window=30).mean().iloc[::30]
+    p_avg['Power'] = p['Power'].rolling(window=30, min_periods=1).mean().iloc[::30]
+    p_avg['Eff'] = p['Eff'].rolling(window=30, min_periods=1).mean().iloc[::30]
     p_avg['Time'] = p['Time'].iloc[::30]
     
+    # reset DataFrame indexing
+    p_avg = p_avg.reset_index(drop=True)
+    
     return (p_start, p_raw, p, p_avg)
+    
+#%% irradiance.csv: Baseline irradiance
+
+filename = os.path.join(baseline_dir, "irradiance.csv")
+(_, bline_irr, bline_irr_avg) = read_irr_export(filename)
+
 #%% power_1_2.csv: Baseline Panel 1 (standalone)
 
 filename = os.path.join(baseline_dir, "power_1_2.csv")
-(bline_sta_start, bline_sta_raw, bline_sta, bline_sta_avg) = read_power_export(filename, 1)
+(bline_sta_start, bline_sta_raw, bline_sta, bline_sta_avg) = read_power_export(filename, bline_irr, 1)
 
 #%% power_1_2.csv: Baseline Panel 2 (TEG)
 
 filename = os.path.join(baseline_dir, "power_1_2.csv")
-(_, bline_teg_raw, bline_teg, bline_teg_avg) = read_power_export(filename, 3)
+(_, bline_teg_raw, bline_teg, bline_teg_avg) = read_power_export(filename, bline_irr, 3)
 
 #%% power_3.csv: Baseline Panel 3 (PCM)
 filename = os.path.join(baseline_dir, "power_3.csv")
-(_, bline_pcm_raw, bline_pcm, bline_pcm_avg) = read_power_export(filename, 1)
+(_, bline_pcm_raw, bline_pcm, bline_pcm_avg) = read_power_export(filename, bline_irr, 1)
 
 #%% temps.csv: Baseline Temperature (all panels)
 
@@ -204,10 +235,6 @@ filename = os.path.join(baseline_dir, "temps.csv")
 (_, bline_teg_temps, bline_teg_temps_avg) = read_temps_export(filename, 4)
 (_, bline_pcm_temps, bline_pcm_temps_avg) = read_temps_export(filename, 7)
 
-#%% irradiance.csv: Baseline irradiance
-
-filename = os.path.join(baseline_dir, "irradiance.csv")
-(_, bline_irr, bline_irr_avg) = read_irr_export(filename)
 #%% Plot baseline panel power
 plots.append(plt.figure())
 plt.plot(bline_sta_avg['Time'], bline_sta_avg['Power'],
@@ -248,6 +275,21 @@ plt.title('Baseline irradiance vs time, 30-minute averages')
 plt.xlabel("Time")
 plt.ylabel("Irradiance (W/m^2)")
 
+#%% Plot baseline efficiency
+plots.append(plt.figure())
+plt.plot(bline_sta_avg['Time'], bline_sta_avg['Eff'],
+            marker='.', color='k')
+plt.plot(bline_teg_avg['Time'], bline_teg_avg['Eff'],
+            marker='.', color='b')
+plt.plot(bline_pcm_avg['Time'], bline_pcm_avg['Eff'],
+            marker='.', color='r')
+plt.title('Baseline panel efficiency vs time')
+plt.xlabel("Time")
+plt.ylabel("Efficiency (%)")
+plt.legend(['Standalone Panel', 'TEG Panel', 'PCM Panel'])
+
+plots[-1].gca().yaxis.set_major_formatter(mtick.PercentFormatter())
+
 #%% Plot baseline panel temperatures at center
 plots.append(plt.figure())
 plt.plot(bline_sta_temps_avg['Time'], bline_sta_temps_avg['M'],
@@ -269,7 +311,7 @@ plt.plot(bline_teg_temps_avg['Time'], bline_teg_temps_avg['Avg'],
             marker='.', color='b')
 plt.plot(bline_pcm_temps_avg['Time'], bline_pcm_temps_avg['Avg'],
             marker='.', color='r')
-plt.title('Baseline average panel temperature vs time, 30-minute averages')
+plt.title('Baseline 3-thermocouple average panel temperature vs time,\n30-minute averages')
 plt.xlabel("Time")
 plt.ylabel("Temperature (degrees C)")
 plt.legend(['Standalone Panel', 'TEG Panel', 'PCM Panel'])
